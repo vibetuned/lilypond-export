@@ -135,28 +135,28 @@
          (else #f)
          ))
 
-     (define (add-slur musicstep steppath type)
-        (let ((existing (tree-get musicstep `(,@steppath slur))))
+     (define (add-slur musicstep steppath type name)
+        (let ((existing (tree-get musicstep `(,@steppath slur)))
+              (new-pair (cons type name)))
           (if (list? existing)
-              (tree-set! musicstep `(,@steppath slur) (append existing (list type)))
-              (if (symbol? existing)
-                  (tree-set! musicstep `(,@steppath slur) (list existing type))
-                  (tree-set! musicstep `(,@steppath slur) (list type))))))
+              (if (not (member new-pair existing))
+                  (tree-set! musicstep `(,@steppath slur) (append existing (list new-pair))))
+              (tree-set! musicstep `(,@steppath slur) (list new-pair)))))
 
       (define (scan-articulations music musicstep steppath)
         (let ((name (ly:music-property music 'name)))
           ; Check the music object itself
           (if (memq name '(SlurEvent PhrasingSlurEvent TieEvent AbsoluteDynamicEvent))
               (begin
-               (ly:message "Found artic: ~A at ~A" name steppath)
+
                (cond
                 ((memq name '(SlurEvent PhrasingSlurEvent))
                  (let ((dir (ly:music-property music 'span-direction)))
                    (if (not (number? dir)) (set! dir (ly:music-property music 'direction))) ; Fallback? No, span-direction is standard
-                   (ly:message "Slur dir: ~A" dir)
+
                    (cond
-                    ((= -1 dir) (add-slur musicstep steppath 'start))
-                    ((= 1 dir) (add-slur musicstep steppath 'stop))
+                    ((= -1 dir) (add-slur musicstep steppath 'start name))
+                    ((= 1 dir) (add-slur musicstep steppath 'stop name))
                     )))
                 ((eq? name 'TieEvent)
                  (tree-set! musicstep `(,@steppath tie) 'start))
@@ -171,10 +171,7 @@
           
           ; Recurse into elements
           (let ((elts (ly:music-property music 'elements)))
-            (if (eq? name 'EventChord)
-                (begin
-                  (ly:message "Scanning EventChord elements...")
-                  (for-each (lambda (m) (ly:message "  Element: ~A" (ly:music-property m 'name))) elts)))
+
             (if (list? elts)
                 (for-each (lambda (m) (scan-articulations m musicstep steppath)) elts)))
           ))
@@ -267,10 +264,11 @@
                      ; track time for beams
                      (if (not (and
                                (pair? (cdr beam-time))
-                               (ly:moment<? (cdr beam-time) moment)
-                               (ly:moment<? (car beam-time) moment) ; why that?
+                               (ly:moment<? (cdr (cdr beam-time)) moment)
+                               (ly:moment<? (cdr (car beam-time)) moment) ; why that?
                                ))
-                         (set! beam-time (cons moment moment))) ; reset beam time
+                         (let ((ts (cons bar moment)))
+                           (set! beam-time (cons ts ts)))) ; reset beam time
 
                      ; store in step tree
                      (tree-set! musicstep steppath music)
@@ -300,10 +298,9 @@
                   ((memq name '(SlurEvent PhrasingSlurEvent))
                    (let ((dir (ly:music-property music 'span-direction)))
                      (if (not (number? dir)) (set! dir (ly:music-property music 'direction)))
-                     (ly:message "Separate SlurEvent dir: ~A at ~A" dir steppath)
                      (cond
-                      ((= -1 dir) (add-slur musicstep steppath 'start))
-                      ((= 1 dir) (add-slur musicstep steppath 'stop))
+                      ((= -1 dir) (add-slur musicstep steppath 'start name))
+                      ((= 1 dir) (add-slur musicstep steppath 'stop name))
                       )))
 
                   ((eq? name 'TieEvent)

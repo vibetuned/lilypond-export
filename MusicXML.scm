@@ -147,16 +147,13 @@
                (if (pair? tuplet)
                    (writeln "<tuplet number=\"1\" placement=\"above\" type=\"~A\" />" (car tuplet)))
                
-               (if (symbol? slur) (writeln "<slur number=\"1\" type=\"~A\"/>" slur))
                (if (pair? slur) 
-                   (if (list? slur)
-                       (let ((n 1))
-                         (for-each (lambda (s) 
-                                     (writeln "<slur number=\"~A\" type=\"~A\"/>" n s)
-                                     (set! n (1+ n)))
-                                   slur))
-                       ; Fallback if it somehow became a single pair (unlikely with add-slur)
-                       (writeln "<slur number=\"1\" type=\"~A\"/>" slur)))
+                   (let ((n 1))
+                     (for-each (lambda (s)
+                                 ; s is now (type . name), so we want (car s) for the type string ('start or 'stop)
+                                 (writeln "<slur number=\"~A\" type=\"~A\"/>" n (car s))
+                                 (set! n (1+ n)))
+                               slur)))
 
                (if (eq? tie 'start)
                    (writeln "<tied type=\"start\"/>"))
@@ -215,10 +212,11 @@
                   (artics (filter (lambda (m) (not (music-is? m 'NoteEvent))) elements)))
              (if (> note-count 0) (apply writemusic (car notes) staff voice opts))
              ;(set! opts (assoc-remove! opts 'beam))
-             (for-each
-              (lambda (n)
-                (apply writemusic n staff voice (cons '(chord . #t) opts))
-                ) (cdr notes))
+             (let ((chord-opts (cons* '(chord . #t) '(slur . #f) '(tuplet . #f) opts)))
+               (for-each
+                (lambda (n)
+                  (apply writemusic n staff voice chord-opts)
+                  ) (cdr notes)))
              ))
 
           )))
