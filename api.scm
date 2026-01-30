@@ -145,11 +145,11 @@
       (define (scan-articulations music musicstep steppath)
         (let ((name (ly:music-property music 'name)))
           ; Check the music object itself
-          (if (memq name '(SlurEvent TieEvent AbsoluteDynamicEvent))
+          (if (memq name '(SlurEvent PhrasingSlurEvent TieEvent AbsoluteDynamicEvent))
               (begin
                (ly:message "Found artic: ~A at ~A" name steppath)
                (cond
-                ((eq? name 'SlurEvent)
+                ((memq name '(SlurEvent PhrasingSlurEvent))
                  (let ((dir (ly:music-property music 'span-direction)))
                    (if (not (number? dir)) (set! dir (ly:music-property music 'direction))) ; Fallback? No, span-direction is standard
                    (ly:message "Slur dir: ~A" dir)
