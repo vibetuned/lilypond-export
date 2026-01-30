@@ -38,6 +38,7 @@
 
 (use-modules
  (oll-core tree)
+ (srfi srfi-1)
  (oll-core internal music-tools)
  (lilypond-export lily)
  (lilypond-export MusicXML)
@@ -170,6 +171,10 @@
           
           ; Recurse into elements
           (let ((elts (ly:music-property music 'elements)))
+            (if (eq? name 'EventChord)
+                (begin
+                  (ly:message "Scanning EventChord elements...")
+                  (for-each (lambda (m) (ly:message "  Element: ~A" (ly:music-property m 'name))) elts)))
             (if (list? elts)
                 (for-each (lambda (m) (scan-articulations m musicstep steppath)) elts)))
           ))
@@ -267,11 +272,11 @@
                                ))
                          (set! beam-time (cons moment moment))) ; reset beam time
 
-                     ; scan for articulations (ties, dynamics - removed slurs from here)
-                     (scan-articulations music musicstep steppath)
-
                      ; store in step tree
-                     (tree-set! musicstep steppath music)))
+                     (tree-set! musicstep steppath music)
+
+                     ; scan for articulations (ties, dynamics - removed slurs from here)
+                     (scan-articulations music musicstep steppath)))
 
                   ((eq? name 'TupletSpanEvent)
                    (let ((timestamp (ly:music-property music 'timestamp))
