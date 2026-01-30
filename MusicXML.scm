@@ -334,7 +334,7 @@
                                     )
   
                                   ; TODO staff grouping!
-                                  (writemusic music 1 voice
+                                  (writemusic music staff voice
                                     `(beam . ,(cond
                                                ((eq? 'start beam) 'begin)
                                                ((symbol? beam) beam)

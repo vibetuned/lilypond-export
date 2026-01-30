@@ -152,10 +152,10 @@
                 ((eq? name 'SlurEvent)
                  (let ((dir (ly:music-property music 'span-direction)))
                    (if (not (number? dir)) (set! dir (ly:music-property music 'direction))) ; Fallback? No, span-direction is standard
-                   (ly:message "Slur dir: ~A" (ly:music-property music 'span-direction))
+                   (ly:message "Slur dir: ~A" dir)
                    (cond
-                    ((= -1 (ly:music-property music 'span-direction)) (add-slur musicstep steppath 'start))
-                    ((= 1 (ly:music-property music 'span-direction)) (add-slur musicstep steppath 'stop))
+                    ((= -1 dir) (add-slur musicstep steppath 'start))
+                    ((= 1 dir) (add-slur musicstep steppath 'stop))
                     )))
                 ((eq? name 'TieEvent)
                  (tree-set! musicstep `(,@steppath tie) 'start))
@@ -479,11 +479,19 @@
                   (tree-set! musicexport `(,bar ,moment ,@path) value)
                   ) '(empty . #f)))
 
+
           (if (and (string? barline)(not (equal? "" barline))(not (equal? "|" barline)))
               (begin
-               (tree-set! musicexport (list bar moment 'barline) barline)
-               (tree-set! musicexport (list bar moment id 'barline) barline)
-               ))
+               (if (and (= (ly:moment-main-numerator moment) 0) (> bar 1))
+                   (begin
+                    ; attach to previous bar at mlength moment
+                    (tree-set! musicexport (list (1- bar) mlen 'barline) barline)
+                    (tree-set! musicexport (list (1- bar) mlen id 'barline) barline))
+                   (begin
+                    ; normal attachment
+                    (tree-set! musicexport (list bar moment 'barline) barline)
+                    (tree-set! musicexport (list bar moment id 'barline) barline))
+                   )))
           ))
 
        (listeners
