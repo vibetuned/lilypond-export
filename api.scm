@@ -32,7 +32,7 @@
 ;%                                                                             %
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-;% TODO ties, slurs, grace notes, bar lines
+
 
 (define-module (lilypond-export api))
 
@@ -134,6 +134,46 @@
          (else #f)
          ))
 
+     (define (add-slur musicstep steppath type)
+        (let ((existing (tree-get musicstep `(,@steppath slur))))
+          (if (list? existing)
+              (tree-set! musicstep `(,@steppath slur) (append existing (list type)))
+              (if (symbol? existing)
+                  (tree-set! musicstep `(,@steppath slur) (list existing type))
+                  (tree-set! musicstep `(,@steppath slur) (list type))))))
+
+      (define (scan-articulations music musicstep steppath)
+        (let ((name (ly:music-property music 'name)))
+          ; Check the music object itself
+          (if (memq name '(SlurEvent TieEvent AbsoluteDynamicEvent))
+              (begin
+               (ly:message "Found artic: ~A at ~A" name steppath)
+               (cond
+                ((eq? name 'SlurEvent)
+                 (let ((dir (ly:music-property music 'span-direction)))
+                   (if (not (number? dir)) (set! dir (ly:music-property music 'direction))) ; Fallback? No, span-direction is standard
+                   (ly:message "Slur dir: ~A" (ly:music-property music 'span-direction))
+                   (cond
+                    ((= -1 (ly:music-property music 'span-direction)) (add-slur musicstep steppath 'start))
+                    ((= 1 (ly:music-property music 'span-direction)) (add-slur musicstep steppath 'stop))
+                    )))
+                ((eq? name 'TieEvent)
+                 (tree-set! musicstep `(,@steppath tie) 'start))
+                ((eq? name 'AbsoluteDynamicEvent)
+                 (tree-set! musicstep `(,@steppath dynamic) (ly:music-property music 'text)))
+                )))
+          
+          ; Recurse into articulations
+          (let ((artics (ly:music-property music 'articulations)))
+            (if (list? artics)
+                (for-each (lambda (m) (scan-articulations m musicstep steppath)) artics)))
+          
+          ; Recurse into elements
+          (let ((elts (ly:music-property music 'elements)))
+            (if (list? elts)
+                (for-each (lambda (m) (scan-articulations m musicstep steppath)) elts)))
+          ))
+
 
       (make-engraver
        ((initialize trans)
@@ -188,7 +228,7 @@
                 (moment (ly:context-property context 'measurePosition (ly:make-moment 0))))
             ; notes and rests are stored in the tree under measeure/moment/staff/voice
             ; TODO MultiMeasureRests, Upbeats
-            (if (and (ly:music? music) (= 0 (ly:moment-grace moment))) ; Drop grace notes!
+            (if (ly:music? music)
                 (let* ((path (list bar moment
                                (ly:context-property context ctprop::staff-id)
                                (ly:context-property context ctprop::voice-id)))
@@ -235,7 +275,10 @@
                           (set! tuplet-time (cons (cdr tuplet-time) (cons bar moment))))
 
                       ; store music
-                      (tree-set! musicstep steppath music)))
+                      (tree-set! musicstep steppath music)
+                      
+                      ; check articulations for slurs, ties, dynamics
+                      (scan-articulations music musicstep steppath)))
 
                    ((eq? (ly:music-property music 'name) 'TupletSpanEvent)
                     (let ((timestamp (ly:music-property music 'timestamp))
@@ -255,6 +298,17 @@
                           (tree-set! musicexport `(,(car tup-time) ,(cdr tup-time) ,@steppath tuplet) `(stop . #f))
                           ))
                        )))
+                   ((eq? (ly:music-property music 'name) 'SlurEvent)
+                    (let ((dir (ly:music-property music 'span-direction)))
+                      (ly:message "Separate SlurEvent dir: ~A at ~A" dir steppath)
+                      (cond
+                       ((= -1 dir) (add-slur musicstep steppath 'start))
+                       ((= 1 dir) (add-slur musicstep steppath 'stop))
+                       )))
+                   ((eq? (ly:music-property music 'name) 'TieEvent)
+                    (tree-set! musicstep `(,@steppath tie) 'start))
+                   ((eq? (ly:music-property music 'name) 'AbsoluteDynamicEvent)
+                    (tree-set! musicstep `(,@steppath dynamic) (ly:music-property music 'text)))
                    )))
             ))
         )
