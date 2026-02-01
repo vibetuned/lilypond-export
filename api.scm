@@ -247,6 +247,14 @@
                        (if (and (ly:duration? dur)(or (not shortdur) (ly:duration<? dur shortdur)))
                            (tree-set! musicexport '(division-dur) dur)))
 
+                     ; extract fingering and store as property
+                     (let ((artics (ly:music-property music 'articulations)))
+                       (if (list? artics)
+                           (for-each (lambda (art)
+                                       (if (eq? 'FingeringEvent (ly:music-property art 'name))
+                                           (ly:music-set-property! music 'fingering (ly:music-property art 'digit))))
+                                     artics)))
+
                      ; if we already have a note, combine it to a eventchord
                      (if (ly:music? notes) (set! music (combine-notes notes music)))
 

@@ -137,11 +137,12 @@
             (tuplet (ly:assoc-get 'tuplet opts))
             (tie (ly:assoc-get 'tie opts))
             (slur (ly:assoc-get 'slur opts))
+            (fingering (or (ly:music-property m 'fingering) (ly:assoc-get 'fingering opts)))
             (lyrics (ly:assoc-get 'lyrics opts))
             (moment (ly:assoc-get 'moment opts)))
         
         (define (write-notations)
-          (if (or (pair? tuplet) (not (null? slur)) (eq? tie 'start))
+          (if (or (pair? tuplet) (not (null? slur)) (eq? tie 'start) (integer? fingering))
               (begin
                (writeln "<notations>")
                (if (pair? tuplet)
@@ -157,6 +158,10 @@
 
                (if (eq? tie 'start)
                    (writeln "<tied type=\"start\"/>"))
+                
+               (if (and (integer? fingering) (> fingering 0))
+                   (writeln "<technical><fingering>~A</fingering></technical>" fingering))
+
                (writeln "</notations>")
                )))
 
@@ -328,6 +333,7 @@
                                       (lyrics (tree-get musicexport (list measure moment staff voice 'lyrics)))
                                       (tie (tree-get musicexport (list measure moment staff voice 'tie)))
                                       (slur (tree-get musicexport (list measure moment staff voice 'slur)))
+                                      (fingering (tree-get musicexport (list measure moment staff voice 'fingering)))
                                       )
                                   (case beam
                                     ((start) (set! beamcont 'continue))
@@ -345,7 +351,8 @@
                                     `(tuplet . ,tuplet)
                                     `(lyrics . ,lyrics)
                                     `(tie . ,tie)
-                                    `(slur . ,slur))
+                                    `(slur . ,slur)
+                                    `(fingering . ,fingering))
                                 (if (ly:duration? dur)
                                     (set! backup (+ backup (* (duration-factor dur) divisions))))
                                 ))

@@ -1,3 +1,24 @@
+# This is a fork of the lilypond-export package.
+
+Is mainly for experimental use, but I am making it public in case it is useful for someone else.
+
+The original package is available here: https://github.com/open-lily-labs/lilypond-export
+
+This fork is a work in progress. And include some modifications and improvements that I have made to the original package.
+
+Mainly I am interested in the MusicXML export format. So I am focusing on that. 
+
+TODO: 
+- [x] add support for ties,
+- [x] add support for slurs,
+- [x] add support for grace notes,
+- [x] add support for tuplets,
+- [ ] add support for beams, # broken but easy to fix in xml
+- [x] add support for fingerings,
+- [x] add support for dynamics,
+- [ ] add support for articulations,
+- [ ] add support for pedal markings,
+
 # LilyPond Export
 
 In this repository I am creating an export-infrastructure for LilyPond.
