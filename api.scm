@@ -32,12 +32,13 @@
 ;%                                                                             %
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-;% TODO ties, slurs, grace notes, bar lines
+
 
 (define-module (lilypond-export api))
 
 (use-modules
  (oll-core tree)
+ (srfi srfi-1)
  (oll-core internal music-tools)
  (lilypond-export lily)
  (lilypond-export MusicXML)
@@ -134,6 +135,47 @@
          (else #f)
          ))
 
+     (define (add-slur musicstep steppath type name)
+        (let ((existing (tree-get musicstep `(,@steppath slur)))
+              (new-pair (cons type name)))
+          (if (list? existing)
+              (if (not (member new-pair existing))
+                  (tree-set! musicstep `(,@steppath slur) (append existing (list new-pair))))
+              (tree-set! musicstep `(,@steppath slur) (list new-pair)))))
+
+      (define (scan-articulations music musicstep steppath)
+        (let ((name (ly:music-property music 'name)))
+          ; Check the music object itself
+          (if (memq name '(SlurEvent PhrasingSlurEvent TieEvent AbsoluteDynamicEvent))
+              (begin
+
+               (cond
+                ((memq name '(SlurEvent PhrasingSlurEvent))
+                 (let ((dir (ly:music-property music 'span-direction)))
+                   (if (not (number? dir)) (set! dir (ly:music-property music 'direction))) ; Fallback? No, span-direction is standard
+
+                   (cond
+                    ((= -1 dir) (add-slur musicstep steppath 'start name))
+                    ((= 1 dir) (add-slur musicstep steppath 'stop name))
+                    )))
+                ((eq? name 'TieEvent)
+                 (tree-set! musicstep `(,@steppath tie) 'start))
+                ((eq? name 'AbsoluteDynamicEvent)
+                 (tree-set! musicstep `(,@steppath dynamic) (ly:music-property music 'text)))
+                )))
+          
+          ; Recurse into articulations
+          (let ((artics (ly:music-property music 'articulations)))
+            (if (list? artics)
+                (for-each (lambda (m) (scan-articulations m musicstep steppath)) artics)))
+          
+          ; Recurse into elements
+          (let ((elts (ly:music-property music 'elements)))
+
+            (if (list? elts)
+                (for-each (lambda (m) (scan-articulations m musicstep steppath)) elts)))
+          ))
+
 
       (make-engraver
        ((initialize trans)
@@ -181,82 +223,100 @@
 
        (listeners
         ((StreamEvent engraver event) ; listen to any event
-          (let ((musicexport (ly:context-property context ctprop::music-export))
-                (musicstep (ly:context-property context ctprop::export-step))
-                (music (ly:event-property event 'music-cause))
-                (bar (ly:context-property context 'currentBarNumber 1))
-                (moment (ly:context-property context 'measurePosition (ly:make-moment 0))))
-            ; notes and rests are stored in the tree under measeure/moment/staff/voice
-            ; TODO MultiMeasureRests, Upbeats
-            (if (and (ly:music? music) (= 0 (ly:moment-grace moment))) ; Drop grace notes!
-                (let* ((path (list bar moment
-                               (ly:context-property context ctprop::staff-id)
-                               (ly:context-property context ctprop::voice-id)))
-                       (steppath (cddr path))
-                       (notes (tree-get musicstep steppath)))
-                  (ly:music-set-property! music 'timestamp (cons bar moment))
-                  (cond
-                   ((memq (ly:music-property music 'name) '(NoteEvent RestEvent))
-                    (let ((dur (ly:event-property event 'duration)))
+         (let ((musicexport (ly:context-property context ctprop::music-export))
+               (musicstep (ly:context-property context ctprop::export-step))
+               (music (ly:event-property event 'music-cause))
+               (bar (ly:context-property context 'currentBarNumber 1))
+               (moment (ly:context-property context 'measurePosition (ly:make-moment 0))))
+           ; notes and rests are stored in the tree under measeure/moment/staff/voice
+           ; TODO MultiMeasureRests, Upbeats
+           (if (ly:music? music)
+               (let* ((path (list bar moment
+                                  (ly:context-property context ctprop::staff-id)
+                                  (ly:context-property context ctprop::voice-id)) )
+                      (steppath (cddr path))
+                      (notes (tree-get musicstep steppath))
+                      (name (ly:music-property music 'name)))
+                 (ly:music-set-property! music 'timestamp (cons bar moment))
+                 (cond
+                  ((memq name '(NoteEvent RestEvent))
+                   (let ((dur (ly:event-property event 'duration)))
 
-                      ; track shortest duration (musicXML/MEI divisions)
-                      (let ((shortdur (tree-get musicexport '(division-dur))))
-                        (if (and (ly:duration? dur)(or (not shortdur) (ly:duration<? dur shortdur)))
-                            (tree-set! musicexport '(division-dur) dur))
-                        )
+                     ; track shortest duration (musicXML/MEI divisions)
+                     (let ((shortdur (tree-get musicexport '(division-dur))))
+                       (if (and (ly:duration? dur)(or (not shortdur) (ly:duration<? dur shortdur)))
+                           (tree-set! musicexport '(division-dur) dur)))
 
-                      ; if we already have a note, combine it to a eventchord
-                      (if (ly:music? notes) (set! music (combine-notes notes music)))
+                     ; extract fingering and store as property
+                     (let ((artics (ly:music-property music 'articulations)))
+                       (if (list? artics)
+                           (for-each (lambda (art)
+                                       (if (eq? 'FingeringEvent (ly:music-property art 'name))
+                                           (ly:music-set-property! music 'fingering (ly:music-property art 'digit))))
+                                     artics)))
 
-                      ; tuplets
-                      (let ((scale (ly:duration-scale dur)))
-                        (if (not (integer? scale))
-                            (let ((num (numerator scale))
-                                  (den (denominator scale)))
-                              ;(ly:message "scale ~A/~A" num den)
-                              (tree-set! musicstep `(,@steppath scale) scale)
-                              )))
+                     ; if we already have a note, combine it to a eventchord
+                     (if (ly:music? notes) (set! music (combine-notes notes music)))
 
-                      ; remember current time
-                      (ly:event-set-property! event 'timestamp (cons bar moment))
+                     ; tuplets
+                     (let ((scale (ly:duration-scale dur)))
+                       (if (not (integer? scale))
+                           (let ((num (numerator scale))
+                                 (den (denominator scale)))
+                             ;(ly:message "scale ~A/~A" num den)
+                             (tree-set! musicstep `(,@steppath scale) scale))))
 
-                      ; track time for beams
-                      (if (not (and
-                                (pair? (cdr beam-time))
-                                (equal? (cadr beam-time) bar)
-                                (equal? (cddr beam-time) moment)))
-                          (set! beam-time (cons (cdr beam-time) (cons bar moment))))
+                     ; remember current time
+                     (ly:event-set-property! event 'timestamp (cons bar moment))
 
-                      ; track time for tuplets
-                      (if (not (and
-                                (pair? (cdr tuplet-time))
-                                (equal? (cadr tuplet-time) bar)
-                                (equal? (cddr tuplet-time) moment)))
-                          (set! tuplet-time (cons (cdr tuplet-time) (cons bar moment))))
+                     ; track time for beams
+                     (if (not (and
+                               (pair? (cdr beam-time))
+                               (ly:moment<? (cdr (cdr beam-time)) moment)
+                               (ly:moment<? (cdr (car beam-time)) moment) ; why that?
+                               ))
+                         (let ((ts (cons bar moment)))
+                           (set! beam-time (cons ts ts)))) ; reset beam time
 
-                      ; store music
-                      (tree-set! musicstep steppath music)))
+                     ; store in step tree
+                     (tree-set! musicstep steppath music)
 
-                   ((eq? (ly:music-property music 'name) 'TupletSpanEvent)
-                    (let ((timestamp (ly:music-property music 'timestamp))
-                          (num (ly:music-property music 'numerator))
-                          (den (ly:music-property music 'denominator))
-                          (dir (ly:music-property music 'span-direction)))
-                      ;(ly:message "tuplet ~A:~A ~A ~A ~A" num den timestamp (cons bar moment) dir)
+                     ; scan for articulations (ties, dynamics - removed slurs from here)
+                     (scan-articulations music musicstep steppath)))
 
-                      (cond
-                       ((and (= -1 dir)(integer? num)(integer? den))
-                        (tree-set! musicstep `(,@steppath tuplet) `(start . ,(/ num den))))
+                  ((eq? name 'TupletSpanEvent)
+                   (let ((timestamp (ly:music-property music 'timestamp))
+                         (num (ly:music-property music 'numerator))
+                         (den (ly:music-property music 'denominator))
+                         (dir (ly:music-property music 'span-direction)))
+                     ;(ly:message "tuplet ~A:~A ~A ~A ~A" num den timestamp (cons bar moment) dir)
 
-                       ((= 1 dir)
-                        (let ((tup-time (cdr tuplet-time)))
-                          ;(ly:message "tuplet time ~A ~A" tup-time (cons bar moment))
+                     (cond
+                      ((and (= -1 dir)(integer? num)(integer? den))
+                       (tree-set! musicstep `(,@steppath tuplet) `(start . ,(/ num den))))
 
-                          (tree-set! musicexport `(,(car tup-time) ,(cdr tup-time) ,@steppath tuplet) `(stop . #f))
-                          ))
-                       )))
-                   )))
-            ))
+                      ((= 1 dir)
+                       (let ((tup-time (cdr tuplet-time)))
+                         ;(ly:message "tuplet time ~A ~A" tup-time (cons bar moment))
+
+                         (tree-set! musicexport `(,(car tup-time) ,(cdr tup-time) ,@steppath tuplet) `(stop . #f))
+                         ))
+                      )))
+
+                  ((memq name '(SlurEvent PhrasingSlurEvent))
+                   (let ((dir (ly:music-property music 'span-direction)))
+                     (if (not (number? dir)) (set! dir (ly:music-property music 'direction)))
+                     (cond
+                      ((= -1 dir) (add-slur musicstep steppath 'start name))
+                      ((= 1 dir) (add-slur musicstep steppath 'stop name))
+                      )))
+
+                  ((eq? name 'TieEvent)
+                   (tree-set! musicstep `(,@steppath tie) 'start))
+                  ((eq? name 'AbsoluteDynamicEvent)
+                   (tree-set! musicstep `(,@steppath dynamic) (ly:music-property music 'text)))
+                  )))
+           ))
         )
 
        (acknowledgers
@@ -425,11 +485,19 @@
                   (tree-set! musicexport `(,bar ,moment ,@path) value)
                   ) '(empty . #f)))
 
+
           (if (and (string? barline)(not (equal? "" barline))(not (equal? "|" barline)))
               (begin
-               (tree-set! musicexport (list bar moment 'barline) barline)
-               (tree-set! musicexport (list bar moment id 'barline) barline)
-               ))
+               (if (and (= (ly:moment-main-numerator moment) 0) (> bar 1))
+                   (begin
+                    ; attach to previous bar at mlength moment
+                    (tree-set! musicexport (list (1- bar) mlen 'barline) barline)
+                    (tree-set! musicexport (list (1- bar) mlen id 'barline) barline))
+                   (begin
+                    ; normal attachment
+                    (tree-set! musicexport (list bar moment 'barline) barline)
+                    (tree-set! musicexport (list bar moment id 'barline) barline))
+                   )))
           ))
 
        (listeners

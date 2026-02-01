@@ -31,7 +31,7 @@
 ;%                                                                             %
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-;% TODO ties, slurs, grace notes
+
 
 (define-module (lilypond-export MusicXML))
 
@@ -135,13 +135,42 @@
             (accidental (ly:assoc-get 'accidental opts #f #f))
             (beam (ly:assoc-get 'beam opts))
             (tuplet (ly:assoc-get 'tuplet opts))
+            (tie (ly:assoc-get 'tie opts))
+            (slur (ly:assoc-get 'slur opts))
+            (fingering (or (ly:music-property m 'fingering) (ly:assoc-get 'fingering opts)))
             (lyrics (ly:assoc-get 'lyrics opts))
             (moment (ly:assoc-get 'moment opts)))
-;(ly:message "-----> lyrics ~A" lyrics)
+        
+        (define (write-notations)
+          (if (or (pair? tuplet) (not (null? slur)) (eq? tie 'start) (integer? fingering))
+              (begin
+               (writeln "<notations>")
+               (if (pair? tuplet)
+                   (writeln "<tuplet number=\"1\" placement=\"above\" type=\"~A\" />" (car tuplet)))
+               
+               (if (pair? slur) 
+                   (let ((n 1))
+                     (for-each (lambda (s)
+                                 ; s is now (type . name), so we want (car s) for the type string ('start or 'stop)
+                                 (writeln "<slur number=\"~A\" type=\"~A\"/>" n (car s))
+                                 (set! n (1+ n)))
+                               slur)))
+
+               (if (eq? tie 'start)
+                   (writeln "<tied type=\"start\"/>"))
+                
+               (if (and (integer? fingering) (> fingering 0))
+                   (writeln "<technical><fingering>~A</fingering></technical>" fingering))
+
+               (writeln "</notations>")
+               )))
+
         (case (ly:music-property m 'name)
 
           ((NoteEvent)
            (writeln "<note>")
+           (if (and (ly:moment? moment) (not (= 0 (ly:moment-grace moment))))
+               (writeln "<grace/>"))
            (if chord (writeln "<chord />"))
            (writepitch (ly:music-property m 'pitch))
            (writeduration dur moment)
@@ -152,9 +181,10 @@
                (writeln "<accidental>~A</accidental>" (acctext accidental)))
            (writedots (if (ly:duration? dur) (ly:duration-dot-count dur) 0))
 
+           (if (eq? tie 'start) (writeln "<tie type=\"start\"/>"))
            (if (symbol? beam) (writeln "<beam number=\"1\">~A</beam>" beam))
            (writetimemod dur)
-           (writetuplet tuplet)
+           (write-notations)
            (if (and (not chord) (list? lyrics))
                (for-each
                 (lambda (indexed-lyric)
@@ -168,6 +198,8 @@
 
           ((RestEvent)
            (writeln "<note>")
+           (if (and (ly:moment? moment) (not (= 0 (ly:moment-grace moment))))
+               (writeln "<grace/>"))
            (writeln "<rest />")
            (writeduration dur moment)
 
@@ -175,7 +207,7 @@
            (writetype dur)
            (writedots (if (ly:duration? dur) (ly:duration-dot-count dur) 0))
            (writetimemod dur)
-           (writetuplet tuplet)
+           (write-notations)
            (writeln "</note>"))
 
           ((EventChord)
@@ -185,10 +217,11 @@
                   (artics (filter (lambda (m) (not (music-is? m 'NoteEvent))) elements)))
              (if (> note-count 0) (apply writemusic (car notes) staff voice opts))
              ;(set! opts (assoc-remove! opts 'beam))
-             (for-each
-              (lambda (n)
-                (apply writemusic n staff voice (cons '(chord . #t) opts))
-                ) (cdr notes))
+             (let ((chord-opts (cons* '(chord . #t) '(slur . #f) '(tuplet . #f) opts)))
+               (for-each
+                (lambda (n)
+                  (apply writemusic n staff voice chord-opts)
+                  ) (cdr notes)))
              ))
 
           )))
@@ -266,31 +299,60 @@
                      (set! backup 0)
                      (for-each
                       (lambda (moment)
-                        (let ((music (tree-get musicexport (list measure moment staff voice))))
-                          (if (not (equal? moment (ly:make-moment 0)))
-                              (writeclef measure moment #t))
-                          (if (ly:music? music)
-                              (let ((dur (ly:music-property music 'duration))
-                                    (beam (tree-get musicexport (list measure moment staff voice 'beam)))
-                                    (accidental (tree-get musicexport (list measure moment staff voice 'accidental)))
-                                    (tuplet (tree-get musicexport (list measure moment staff voice 'tuplet)))
-                                    (lyrics (tree-get musicexport (list measure moment staff voice 'lyrics)))
-                                    )
-                                (case beam
-                                  ((start) (set! beamcont 'continue))
-                                  ((end) (set! beamcont #f))
-                                  )
+                          (let ((music (tree-get musicexport (list measure moment staff voice)))
+                                (barline (tree-get musicexport (list measure moment staff 'barline)))
+                                (dynamic (tree-get musicexport (list measure moment staff voice 'dynamic))))
+                            (if (and (string? barline) (equal? voice 1)) ; write bar-line only once per staff
+                                (let ((style (cond
+                                              ((equal? "|." barline) "light-heavy")
+                                              ((equal? "||" barline) "light-light")
+                                              ((equal? ".|" barline) "heavy-light")
+                                              ((equal? ".|." barline) "heavy-heavy")
+                                              ((equal? ";" barline) "tick")
+                                              (else "regular"))))
+                                  (writeln "<barline location=\"right\">")
+                                  (writeln "<bar-style>~A</bar-style>" style)
+                                  (writeln "</barline>")
+                                  ))
+                            
+                            (if (string? dynamic)
+                                (begin
+                                 (writeln "<direction placement=\"below\">")
+                                 (writeln "<direction-type><dynamics><~A/></dynamics></direction-type>" dynamic)
+                                 (writeln "<voice>~A</voice>" voice)
+                                 (writeln "</direction>")
+                                 ))
 
-                                ; TODO staff grouping!
-                                (writemusic music 1 voice
-                                  `(beam . ,(cond
-                                             ((eq? 'start beam) 'begin)
-                                             ((symbol? beam) beam)
-                                             ((symbol? beamcont) beamcont)))
-                                  `(accidental . ,accidental)
-                                  `(moment . ,moment)
-                                  `(tuplet . ,tuplet)
-                                  `(lyrics . ,lyrics))
+                            (if (not (equal? moment (ly:make-moment 0)))
+                                (writeclef measure moment #t))
+                            (if (ly:music? music)
+                                (let ((dur (ly:music-property music 'duration))
+                                      (beam (tree-get musicexport (list measure moment staff voice 'beam)))
+                                      (accidental (tree-get musicexport (list measure moment staff voice 'accidental)))
+                                      (tuplet (tree-get musicexport (list measure moment staff voice 'tuplet)))
+                                      (lyrics (tree-get musicexport (list measure moment staff voice 'lyrics)))
+                                      (tie (tree-get musicexport (list measure moment staff voice 'tie)))
+                                      (slur (tree-get musicexport (list measure moment staff voice 'slur)))
+                                      (fingering (tree-get musicexport (list measure moment staff voice 'fingering)))
+                                      )
+                                  (case beam
+                                    ((start) (set! beamcont 'continue))
+                                    ((end) (set! beamcont #f))
+                                    )
+  
+                                  ; TODO staff grouping!
+                                  (writemusic music staff voice
+                                    `(beam . ,(cond
+                                               ((eq? 'start beam) 'begin)
+                                               ((symbol? beam) beam)
+                                               ((symbol? beamcont) beamcont)))
+                                    `(accidental . ,accidental)
+                                    `(moment . ,moment)
+                                    `(tuplet . ,tuplet)
+                                    `(lyrics . ,lyrics)
+                                    `(tie . ,tie)
+                                    `(slur . ,slur)
+                                    `(fingering . ,fingering))
                                 (if (ly:duration? dur)
                                     (set! backup (+ backup (* (duration-factor dur) divisions))))
                                 ))
